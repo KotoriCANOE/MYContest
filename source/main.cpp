@@ -2,14 +2,19 @@
 
 #if defined (__GNUC__)
 #pragma GCC optimize (2)
-#pragma GCC diagnostic error "-fopenmp -lpthread"
+//#pragma GCC diagnostic error "-fopenmp -lpthread"
 #endif
 
+#include <tuple>
 #include <array>
 #include <vector>
+#include <deque>
+#include <queue>
+#include <list>
 #include <forward_list>
 #include <string>
 #include <cstring>
+#include <climits>
 #include <random>
 #include <cmath>
 #include <algorithm>
@@ -633,10 +638,6 @@ protected:
 template <>
 struct Bailian<4144>
 {
-    typedef std::array<int, 4> MyArray; // { cowNum [0...], A, B, stableNum [1...] }
-    typedef std::vector<MyArray> MyVector;
-    typedef std::forward_list<MyArray> MyList;
-
     static const int TIMEPOINT_MIN = 1;
     static const int TIMEPOINT_MAX = 1000000;
     static const int DURATION_MIN = 0;
@@ -644,11 +645,25 @@ struct Bailian<4144>
 
     static void main()
     {
+#ifdef DEBUG
+        unsigned int seed = static_cast<unsigned int>(std::chrono::system_clock::now().time_since_epoch().count());
+        implement1(seed);
+        implement2(seed);
+#else
+        implement2();
+#endif
+    }
+
+protected:
+    static void implement1(unsigned int seed = 0)
+    {
+        typedef std::array<int, 4> MyArray; // { cowNum [0...], A, B, stableNum [1...] }
+        typedef std::vector<MyArray> MyVector;
+
         // Input
 #ifdef DEBUG
         MyTimer timer;
 
-        unsigned int seed = static_cast<unsigned int>(std::chrono::system_clock::now().time_since_epoch().count());
         std::default_random_engine generator(seed);
         std::uniform_int_distribution<int> distribution1(TIMEPOINT_MIN, TIMEPOINT_MAX);
         std::uniform_int_distribution<int> distribution2(DURATION_MIN, DURATION_MAX);
@@ -663,8 +678,6 @@ struct Bailian<4144>
             cow[1] = distribution1(generator);
             cow[2] = std::min(TIMEPOINT_MAX, cow[1] + distribution2(generator));
         }
-
-        timer.Start();
 #else
         int N;
         scanf("%d", &N);
@@ -677,15 +690,12 @@ struct Bailian<4144>
             scanf("%d %d", &cow[1], &cow[2]);
         }
 #endif
-        // Implement
+
+        // Kernel
         std::sort(cowVec.begin(), cowVec.end(), [](const MyArray &left, const MyArray &right)
         {
-            return left[1] < right[1] || (left[1] == right[1] && left[2] > right[2]);
+            return left[1] < right[1] || (left[1] == right[1] && left[2] < right[2]);
         });
-
-        MyList cowList1(N);
-        MyList cowList2;
-        std::copy(cowVec.begin(), cowVec.end(), cowList1.begin());
 
 #ifdef DEBUG
         timer.Print<MyTimer::Milliseconds>("1");
@@ -693,30 +703,36 @@ struct Bailian<4144>
 #endif
 
         int stableNum = 0;
-
-        while (!cowList1.empty())
         {
-            ++stableNum;
-            int last = 0;
+            std::vector<int> stables(N + 1, 0);
+            stables[0] = INT_MAX; // max padding
+            int minStable = 0; // the index of the stable with minimum end time in last iterations
+            int lastStable = 0; // the index of the last stable in last iterations
 
-            auto cowIter1 = cowList1.begin();
-            auto lastCowIter1 = cowList1.before_begin();
-
-            for(; cowIter1 != cowList1.end();)
+            for (auto &cow : cowVec)
             {
-                MyArray &cow = *cowIter1;
-
-                if (cow[1] > last)
-                {
-                    last = cow[2];
-                    cow[3] = stableNum;
-                    cowList2.push_front(std::move(cow));
-                    cowIter1 = cowList1.erase_after(lastCowIter1);
+                if (cow[1] > stables[minStable])
+                { // this cow fits the existing stable with minimum end time
+                    stables[minStable] = cow[2];
+                    cow[3] = minStable;
+                    minStable = 0;
+                    lastStable = 0;
                 }
-                else
-                {
-                    ++cowIter1;
-                    ++lastCowIter1;
+                else for (int s = lastStable + 1; s <= N; ++s)
+                { // otherwise exhaustive search, start from the first stable or after the last searched stable
+                    if (cow[1] > stables[s])
+                    {
+                        stables[s] = cow[2];
+                        cow[3] = s;
+                        if (s > stableNum) stableNum = s;
+                        if (stables[s] < stables[minStable]) minStable = s;
+                        lastStable = s;
+                        break;
+                    }
+                    else if (stables[s] < stables[minStable])
+                    {
+                        minStable = s;
+                    }
                 }
             }
         }
@@ -726,8 +742,6 @@ struct Bailian<4144>
         timer.Start();
 #endif
 
-        // Output
-        std::copy(cowList2.begin(), cowList2.end(), cowVec.begin());
         std::sort(cowVec.begin(), cowVec.end(), [](const MyArray &left, const MyArray &right)
         {
             return left[0] < right[0];
@@ -738,6 +752,7 @@ struct Bailian<4144>
         timer.Start();
 #endif
 
+        // Output
         std::string outStr;
         outStr.reserve(N * 7);
         outStr.append(std::to_string(stableNum)).append("\n");
@@ -749,6 +764,122 @@ struct Bailian<4144>
 
 #ifdef DEBUG
         timer.Print<MyTimer::Milliseconds>("4");
+        std::cout << stableNum << std::endl;
+#else
+        printf(outStr.c_str());
+#endif
+    }
+
+    static void implement2(unsigned int seed = 0)
+    {
+        typedef std::vector<int> MyVector1;
+        typedef std::pair<int, int *> MyPair1; // { timePoint (I/O) [1...], stableNum [1...] }
+        typedef std::vector<MyPair1> MyVector2;
+        typedef std::pair<int, int> MyPair2; // { stableNum [1...], lastTimePoint [1...] }
+        typedef std::queue<MyPair2> MyQueue;
+
+        // Input
+#ifdef DEBUG
+        MyTimer timer;
+
+        std::default_random_engine generator(seed);
+        std::uniform_int_distribution<int> distribution1(TIMEPOINT_MIN, TIMEPOINT_MAX);
+        std::uniform_int_distribution<int> distribution2(DURATION_MIN, DURATION_MAX);
+
+        int N = 50000;
+
+        MyVector1 cowsStable(N, 0);
+        MyVector2 cowsTimePoint(N * 2);
+        auto cowsTimePointIter = cowsTimePoint.begin();
+
+        for (int i = 0; i < N; ++i, ++cowsTimePointIter)
+        {
+            int t_start = distribution1(generator);
+            int t_end = std::min(TIMEPOINT_MAX, t_start + distribution2(generator));
+            *cowsTimePointIter = std::make_pair(t_start, &cowsStable[i]);
+            *++cowsTimePointIter = std::make_pair(t_end, &cowsStable[i]);
+        }
+
+        timer.Print<MyTimer::Milliseconds>("1");
+        timer.Start();
+#else
+        int N;
+        scanf("%d", &N);
+
+        MyVector1 cowsStable(N, 0);
+        MyVector2 cowsTimePoint(N * 2);
+        auto cowsTimePointIter = cowsTimePoint.begin();
+
+        for (int i = 0; i < N; ++i, ++cowsTimePointIter)
+        {
+            int t_start, t_end;
+            scanf("%d %d", &t_start, &t_end);
+            *cowsTimePointIter = std::make_pair(t_start, &cowsStable[i]);
+            *++cowsTimePointIter = std::make_pair(t_end, &cowsStable[i]);
+        }
+#endif
+
+        // Kernel
+        std::sort(cowsTimePoint.begin(), cowsTimePoint.end(), [](const MyPair1 &left, const MyPair1 &right)
+        {
+            return std::get<0>(left) < std::get<0>(right);
+        });
+
+#ifdef DEBUG
+        timer.Print<MyTimer::Milliseconds>("2");
+        timer.Start();
+#endif
+
+        int stableNum = 0;
+        MyQueue emptyStables;
+
+        for (auto &x : cowsTimePoint)
+        {
+            int &curTimePoint = std::get<0>(x);
+            int &curStable = *std::get<1>(x);
+
+            if (curStable > 0)
+            { // already in stable, so pop cow out, push stable in queue
+                emptyStables.emplace(curStable, curTimePoint);
+            }
+            else if (!emptyStables.empty())
+            { // empty stable exists
+                MyPair2 &e = emptyStables.front();
+
+                if (curTimePoint > std::get<1>(e))
+                { // empty stable is valid at the time, so push cow in, pop stable out queue
+                    curStable = std::get<0>(e);
+                    emptyStables.pop();
+                }
+                else
+                { // no available stable, create new one
+                    curStable = ++stableNum;
+                }
+            }
+            else
+            { // no available stable, create new one
+                curStable = ++stableNum;
+            }
+        }
+
+#ifdef DEBUG
+        timer.Print<MyTimer::Milliseconds>("3");
+        timer.Start();
+#endif
+
+        // Output
+        std::string outStr;
+        outStr.reserve(N * 7);
+        outStr.append(std::to_string(stableNum)).append("\n");
+
+        std::for_each(cowsStable.begin(), cowsStable.end(), [&](const int &cowStable)
+        {
+            outStr.append(std::to_string(cowStable)).append("\n");
+        });
+
+#ifdef DEBUG
+        timer.Print<MyTimer::Milliseconds>("4");
+        std::cout << stableNum << std::endl;
 #else
         printf(outStr.c_str());
 #endif
